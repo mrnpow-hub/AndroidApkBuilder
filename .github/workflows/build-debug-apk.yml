@@ -1,0 +1,121 @@
+name: Build Debug APK
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: Optional owner/repo to build. Leave blank to build the caller repo.
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: Branch, tag, or SHA to build when repository is set.
+        required: false
+        type: string
+        default: main
+      artifact-name:
+        description: Name for the uploaded APK artifact.
+        required: false
+        type: string
+        default: app-debug
+      apk-path:
+        description: Path or glob for the debug APK output.
+        required: false
+        type: string
+        default: app/build/outputs/apk/debug/*.apk
+      gradle-command:
+        description: Gradle command to build the debug APK.
+        required: false
+        type: string
+        default: clean assembleDebug
+      gradle-version:
+        description: Gradle version to install when the repo does not include gradlew.
+        required: false
+        type: string
+        default: "8.2"
+      java-version:
+        description: Java version for the Android build.
+        required: false
+        type: string
+        default: "17"
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Optional owner/repo to build. Leave blank to build this repo.
+        required: false
+        type: string
+      ref:
+        description: Branch, tag, or SHA to build.
+        required: false
+        type: string
+        default: main
+      artifact-name:
+        description: Name for the uploaded APK artifact.
+        required: false
+        type: string
+        default: app-debug
+      apk-path:
+        description: Path or glob for the debug APK output.
+        required: false
+        type: string
+        default: app/build/outputs/apk/debug/*.apk
+      gradle-command:
+        description: Gradle command to build the debug APK.
+        required: false
+        type: string
+        default: clean assembleDebug
+      gradle-version:
+        description: Gradle version to install when the repo does not include gradlew.
+        required: false
+        type: string
+        default: "8.2"
+      java-version:
+        description: Java version for the Android build.
+        required: false
+        type: string
+        default: "17"
+
+jobs:
+  build:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out caller repository
+        if: ${{ inputs.repository == '' }}
+        uses: actions/checkout@v4
+
+      - name: Check out selected repository
+        if: ${{ inputs.repository != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: ${{ inputs.gradle-version }}
+
+      - name: Build with Gradle wrapper
+        if: ${{ hashFiles('gradlew') != '' }}
+        run: |
+          chmod +x ./gradlew
+          ./gradlew ${{ inputs.gradle-command }}
+
+      - name: Build with installed Gradle
+        if: ${{ hashFiles('gradlew') == '' }}
+        run: gradle ${{ inputs.gradle-command }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.apk-path }}
+          if-no-files-found: error
