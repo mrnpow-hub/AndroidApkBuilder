@@ -1,0 +1,7 @@
+name: OOT Windows build
+on: {push: {branches: [experiments/lichii-oot-stutter-build-20261108]}}
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - run: echo Ready
