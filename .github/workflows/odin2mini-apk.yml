@@ -1,0 +1,102 @@
+# Builds the pinned Lichii Android fork for AYN Odin 2 Mini Pro.
+# Based on this repository's reusable APK builder and the upstream Lichii Android workflow.
+name: Lichii Odin 2 Mini Pro - ARM64 APK
+
+on:
+  push:
+    branches:
+      - odin2mini-build-v1
+    paths:
+      - "odin2mini/**"
+      - ".github/workflows/odin2mini-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lichii-odin2mini-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-arm64:
+    name: Build custom Odin APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPRESS: "true"
+      CCACHE_MAXSIZE: 3G
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cache/cpm
+    steps:
+      - name: Check out custom Odin build scripts
+        uses: actions/checkout@v4
+        with:
+          path: builder
+
+      - name: Check out pinned Lichii Android 0.4.0
+        uses: actions/checkout@v4
+        with:
+          repository: pavelgajdo/Lichii-Android
+          ref: 3f664b3fa03257e5e81bca32f9690ac7740bc1ff
+          fetch-depth: 0
+          path: lichii
+
+      - name: Validate source script and apply Odin 2 Mini Pro patch
+        run: |
+          python3 -m py_compile builder/odin2mini/apply.py
+          python3 builder/odin2mini/apply.py lichii
+          git -C lichii diff --check
+
+      - name: Free build disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk/2* /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK NDK and CMake
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "ndk;28.2.13676358" "cmake;3.22.1" "platforms;android-36" "build-tools;36.0.0"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/28.2.13676358" >> "$GITHUB_ENV"
+
+      - name: Install native build tools
+        run: sudo apt-get update && sudo apt-get install -y ccache glslang-tools ninja-build
+
+      - name: Restore compilation caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ccache
+            .cache/cpm
+          key: lichii-odin2mini-${{ runner.os }}-${{ github.sha }}
+          restore-keys: lichii-odin2mini-${{ runner.os }}-
+
+      - name: Build ARM64 release APK
+        working-directory: lichii
+        env:
+          CCACHE: "true"
+        run: |
+          chmod +x .ci/android/build.sh
+          .ci/android/build.sh -t standard -b Release
+
+      - name: Show cache statistics
+        if: always()
+        run: ccache -s || true
+
+      - name: Upload custom Odin 2 Mini Pro APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: lichii-odin2mini-pro-apk-${{ github.sha }}
+          path: |
+            lichii/artifacts/*.apk
+            lichii/src/android/app/build/outputs/apk/mainline/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
