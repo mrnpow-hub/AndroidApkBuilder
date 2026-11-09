@@ -1,8 +1,8 @@
-name: OOT Smooth CrashFix + Arcolade Wolf Windows
+name: OOT Smooth RenderGuard + Arcolade Wolf Windows
 on:
   push:
     branches:
-      - experiments/oot-smooth-crashfix-wolf-20261108
+      - experiments/oot-smooth-render-guard-20261109
     paths:
       - .github/workflows/build-oot-smooth-crashfix-wolf.yml
   workflow_dispatch:
@@ -90,6 +90,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Null-view patch diff check failed' }
           git -C emulator diff -- src/video_core/texture_cache/texture_cache.h
 
+      - name: Apply narrow upstream renderer safety guards (#918 and #921)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile oot_smooth/apply_render_safety.py
+          python oot_smooth/apply_render_safety.py
+          grep -q 'if (value == T(0))' emulator/src/common/bit_util.h
+          grep -q 'image_view_id == NULL_IMAGE_VIEW_ID' emulator/src/video_core/texture_cache/texture_cache.h
+          git -C emulator diff --check
+
       - name: Apply Arcolade wolf EXE and Qt window icon
         shell: bash
         run: |
@@ -176,7 +186,7 @@ jobs:
             -DYUZU_ROOM=OFF -DYUZU_ROOM_STANDALONE=OFF \
             -DYUZU_USE_BUNDLED_QT=OFF -DYUZU_USE_BUNDLED_SDL3=ON \
             -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=OFF \
-            -DLICHII_BUILD_TAG=oot-smooth-ram-pr741 \
+            -DLICHII_BUILD_TAG=oot-smooth-renderguard-pr741 \
             -DLICHII_BUILD_PLATFORM=windows-x86_64-pgo \
             "-DCMAKE_C_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
             "-DCMAKE_CXX_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
@@ -201,12 +211,12 @@ jobs:
           Copy-Item ../oot_smooth/Run_OOT_Smooth.cmd build/release/bin/Run_OOT_Smooth.cmd
           Copy-Item ../oot_smooth/README-OOt-Smooth.txt build/release/bin/README-OOT-SMOOTH.txt
           if (!(Test-Path build/release/bin/Run_OOT_Smooth.cmd)) { throw 'Launcher not packaged' }
-          'Includes upstream Lichii PR #910 null-view crash fix and Arcolade red-eyed wolf icon' | Set-Content -Encoding utf8 build/release/bin/CRASHFIX-WOLF-BUILD.txt
+          'RenderGuard: original PR741/PR579 shader preparation and RAM/VRAM retention, PR910 null-view fix, plus PR918 zero-size staging and narrow PR921 null-view + scale-invalidation guards. Shader quality and GPU scheduling settings unchanged.' | Set-Content -Encoding utf8 build/release/bin/RENDERGUARD-BUILD.txt
 
       - name: Upload complete test build
         uses: actions/upload-artifact@v4
         with:
-          name: OOT-Smooth-CrashFix-Wolf-Windows
+          name: OOT-Smooth-RenderGuard-Wolf-Windows
           path: emulator/build/release/bin/
           if-no-files-found: error
           retention-days: 7
