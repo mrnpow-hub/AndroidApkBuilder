@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="odin2mini_profile_header">Odin 2 Mini Pro presets</string>
+    <string name="odin2mini_balanced">Balanced - 0.75x</string>
+    <string name="odin2mini_balanced_desc">Suggested starting point: shader cache, asynchronous shaders, conservative GPU memory. Some effects may appear late.</string>
+    <string name="odin2mini_quality">Quality - 1x</string>
+    <string name="odin2mini_quality_desc">Full internal resolution, asynchronous shaders off for visual consistency; may stutter or run out of memory in demanding titles.</string>
+    <string name="odin2mini_memory_safe">Memory-safe - 0.5x</string>
+    <string name="odin2mini_memory_safe_desc">Lower resolution and bounded scene-upload memory. Try for memory-heavy games; can reduce texture-streaming speed.</string>
+    <string name="odin2mini_applied">Odin preset applied. Restart the game to ensure all settings take effect.</string>
+</resources>
