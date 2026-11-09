@@ -1,8 +1,8 @@
-name: OOT Smooth RenderGuard + Arcolade Wolf Windows
+name: OOT Smooth Windows FramePacing + Arcolade Wolf
 on:
   push:
     branches:
-      - experiments/oot-smooth-render-guard-20261109
+      - experiments/oot-smooth-windows-pacing-20261109
     paths:
       - .github/workflows/build-oot-smooth-crashfix-wolf.yml
   workflow_dispatch:
@@ -100,6 +100,27 @@ jobs:
           grep -q 'image_view_id == NULL_IMAGE_VIEW_ID' emulator/src/video_core/texture_cache/texture_cache.h
           git -C emulator diff --check
 
+      - name: Fetch pinned upstream Windows pacing commit PR1002
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C emulator fetch --depth=1 --no-tags \
+            https://github.com/zortos293/Lichii.git refs/pull/1002/head
+          test "$(git -C emulator rev-parse FETCH_HEAD)" =             "7a3b8657e51877753ba98b98e44d7087c86cc508"
+
+      - name: Port verified Windows timing scheduling and FPS diagnostic changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile oot_smooth/apply_windows_pacing.py
+          python oot_smooth/apply_windows_pacing.py
+          test -s emulator/src/core/core_timing.cpp
+          grep -q 'CoarseSleep' emulator/src/core/core_timing.cpp
+          grep -q 'EDEN_NX2_STUTTER_LOG' emulator/src/core/perf_stats.cpp
+          grep -q 'EDEN_NX2_TARGET_FPS' emulator/src/video_core/renderer_vulkan/vk_swapchain.cpp
+          grep -q 'PinnedRole::Background' emulator/src/common/thread.cpp
+          git -C emulator diff --check
+
       - name: Apply Arcolade wolf EXE and Qt window icon
         shell: bash
         run: |
@@ -186,7 +207,7 @@ jobs:
             -DYUZU_ROOM=OFF -DYUZU_ROOM_STANDALONE=OFF \
             -DYUZU_USE_BUNDLED_QT=OFF -DYUZU_USE_BUNDLED_SDL3=ON \
             -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=OFF \
-            -DLICHII_BUILD_TAG=oot-smooth-renderguard-pr741 \
+            -DLICHII_BUILD_TAG=oot-smooth-winpacing-pr741 \
             -DLICHII_BUILD_PLATFORM=windows-x86_64-pgo \
             "-DCMAKE_C_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
             "-DCMAKE_CXX_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
@@ -209,14 +230,19 @@ jobs:
           if (!(Test-Path build/release/bin/eden-cli.exe)) { throw 'eden-cli.exe missing' }
           windeployqt --release --no-translations build/release/bin/lichii.exe
           Copy-Item ../oot_smooth/Run_OOT_Smooth.cmd build/release/bin/Run_OOT_Smooth.cmd
+          Copy-Item ../oot_smooth/Run_OOT_Frame_Time_Trace.cmd build/release/bin/Run_OOT_Frame_Time_Trace.cmd
+          Copy-Item ../oot_smooth/Run_OOT_No_Timing_Sleep.cmd build/release/bin/Run_OOT_No_Timing_Sleep.cmd
           Copy-Item ../oot_smooth/README-OOt-Smooth.txt build/release/bin/README-OOT-SMOOTH.txt
+          Copy-Item ../oot_smooth/README-OOT-FRAME-PACING.txt build/release/bin/README-OOT-FRAME-PACING.txt
           if (!(Test-Path build/release/bin/Run_OOT_Smooth.cmd)) { throw 'Launcher not packaged' }
-          'RenderGuard: original PR741/PR579 shader preparation and RAM/VRAM retention, PR910 null-view fix, plus PR918 zero-size staging and narrow PR921 null-view + scale-invalidation guards. Shader quality and GPU scheduling settings unchanged.' | Set-Content -Encoding utf8 build/release/bin/RENDERGUARD-BUILD.txt
+          if (!(Test-Path build/release/bin/Run_OOT_Frame_Time_Trace.cmd)) { throw 'Trace launcher not packaged' }
+          if (!(Test-Path build/release/bin/Run_OOT_No_Timing_Sleep.cmd)) { throw 'A/B launcher not packaged' }
+          'WindowsPacing: RenderGuard PR741/PR579/PR910/PR918/PR921 guards plus pinned Lichii PR1002 Windows timing sleep, optional worker pinning, opt-in FPS target and logging. GPU shader fidelity unchanged.' | Set-Content -Encoding utf8 build/release/bin/FRAME-PACING-BUILD.txt
 
       - name: Upload complete test build
         uses: actions/upload-artifact@v4
         with:
-          name: OOT-Smooth-RenderGuard-Wolf-Windows
+          name: OOT-Smooth-Windows-Pacing-Wolf-Windows
           path: emulator/build/release/bin/
           if-no-files-found: error
           retention-days: 7
