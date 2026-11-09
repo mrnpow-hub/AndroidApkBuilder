@@ -1,4 +1,5 @@
 name: OOT Smooth Windows FramePacing + Arcolade Wolf
+# Build B: verify canonical Git blobs rather than CRLF checkout bytes.
 on:
   push:
     branches:
