@@ -69,12 +69,7 @@ jobs:
           $file = 'emulator/src/video_core/texture_cache/texture_cache.h'
           $src = [IO.File]::ReadAllText($file)
           $old = '        PrepareImageView(entry.view, false, false);'
-          $new = @'
-        // The null image has no valid format or contents to upload (Lichii PR #910).
-        if (entry.view != NULL_IMAGE_VIEW_ID) {
-            PrepareImageView(entry.view, false, false);
-        }
-'@
+          $new = '        if (entry.view != NULL_IMAGE_VIEW_ID) {' + [Environment]::NewLine + '            PrepareImageView(entry.view, false, false);' + [Environment]::NewLine + '        }'
           $scope = $src.IndexOf('bool TextureCache<P>::ResolveMemoizedTextures(')
           if ($scope -lt 0) { throw 'ResolveMemoizedTextures function missing' }
           $tail = $src.Substring($scope)
