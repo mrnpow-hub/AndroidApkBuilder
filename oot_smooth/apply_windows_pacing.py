@@ -55,10 +55,15 @@ assert "if (entry.view != NULL_IMAGE_VIEW_ID)" in guarded
 # Two-phase verification: validate every old/new blob BEFORE overwriting any file.
 imports: dict[str, bytes] = {}
 for path, (old_sha, new_sha) in FILES.items():
-    current = (ROOT / path).read_bytes()
-    actual_old_sha = git("hash-object", "--stdin", data=current).decode().strip()
+    # Windows checkout may have CRLF worktree bytes. Git's stored blob SHA
+    # remains canonical, while git diff --quiet verifies the worktree has
+    # not been edited (with normal Git EOL normalization applied).
+    actual_old_sha = git("rev-parse", f"HEAD:{path}").decode().strip()
     if not actual_old_sha.startswith(old_sha):
-        raise RuntimeError(f"Base source unexpectedly modified: {path} {actual_old_sha} != {old_sha}")
+        raise RuntimeError(f"Base source blob unexpected: {path} {actual_old_sha} != {old_sha}")
+    subprocess.run(
+        ["git", "-C", str(ROOT), "diff", "--quiet", "--", path], check=True
+    )
     replacement = git("show", f"{UPSTREAM}:{path}")
     actual_new_sha = git("hash-object", "--stdin", data=replacement).decode().strip()
     if not actual_new_sha.startswith(new_sha):
