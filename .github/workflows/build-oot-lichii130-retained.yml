@@ -5,7 +5,20 @@ on:
       - experiments/oot-lichii130-retention-20261109
     paths:
       - .github/workflows/build-oot-lichii130-retained.yml
+      - oot_smooth/apply_retention_build130.py
+      - oot_smooth/patches/pipeline_eviction_policy.h
+      - oot_smooth/assets/arcolade_wolf_red_eyes_128.png.b64
+      - oot_smooth/Run_Lichii130_*.cmd
+      - oot_smooth/README-Lichii130.txt
   workflow_dispatch:
+
+concurrency:
+  group: lichii130-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SCCACHE_DIR: ${{ github.workspace }}/.sccache
+  SCCACHE_CACHE_SIZE: 3G
 
 permissions:
   contents: read
@@ -110,6 +123,25 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Clang failed to launch' }
           "LLVM_ROOT=$($root.Replace('\', '/'))" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
+      # Use the same Windows compiler cache as Lichii's upstream release workflow.
+      # Cache misses compile normally; subsequent builds reuse unchanged clang-cl objects.
+      - name: Install pinned sccache 0.19.0
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP 'sccache-v0.19.0.zip'
+          Invoke-WebRequest -OutFile $zip 'https://github.com/mozilla/sccache/releases/download/v0.19.0/sccache-v0.19.0-x86_64-pc-windows-msvc.zip'
+          $expected = '28be8c61f6b2c89b9eb2869f6af7f78e6f992e78a8abae0ce855fcc129cbeac1'
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Unexpected sccache digest: $actual" }
+          $root = Join-Path $env:RUNNER_TEMP 'sccache'
+          Expand-Archive -LiteralPath $zip -DestinationPath $root
+          $binary = Get-ChildItem -Path $root -Recurse -File -Filter 'sccache.exe' | Select-Object -First 1
+          if (!$binary) { throw 'sccache.exe not found in verified release' }
+          $binary.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          & $binary.FullName --version
+          if ($LASTEXITCODE -ne 0) { throw 'sccache failed to launch' }
+
       - name: Install Qt 6.8.3
         uses: jurplel/install-qt-action@v4
         with:
@@ -133,6 +165,18 @@ jobs:
           restore-keys: |
             experimental-oot-fritchii-cpm-v1
 
+      # Store *compiled object files* as well as downloaded CMake packages.
+      # The PGO profile hash isolates incompatible cached objects automatically.
+      # A unique key per run permits saving fresh misses; restore uses newest prior run.
+      - name: Restore compiler objects
+        id: compiler-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .sccache
+          key: lichii130-clang22.1.8-pgo-${{ hashFiles('emulator/lichii-windows.profdata') }}-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            lichii130-clang22.1.8-pgo-${{ hashFiles('emulator/lichii-windows.profdata') }}-v1-
+
       - name: Configure Lichii build-130 Windows PGO
         shell: bash
         working-directory: emulator
@@ -152,15 +196,44 @@ jobs:
             -DLICHII_BUILD_PLATFORM=windows-x86_64-pgo \
             "-DCMAKE_C_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
             "-DCMAKE_CXX_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
             "-DCMAKE_LINKER=$LLVM_ROOT/bin/lld-link.exe" \
             "-DCMAKE_AR=$LLVM_ROOT/bin/llvm-lib.exe" \
             "-DCMAKE_C_FLAGS=$flags" \
             "-DCMAKE_CXX_FLAGS=-EHsc $flags"
 
-      - name: Compile Windows EXE
+      - name: Compile Windows EXE (cached, four workers)
+        id: compile
         shell: bash
         working-directory: emulator
-        run: cmake --build build/release --target yuzu yuzu-cmd --parallel 3
+        run: |
+          set -euo pipefail
+          sccache --zero-stats
+          started=$(date +%s)
+          # The Windows hosted runner provides four vCPUs; keep a measured ceiling
+          # rather than queueing unlimited compiler jobs on this memory-limited VM.
+          cmake --build build/release --target yuzu yuzu-cmd --parallel 4
+          elapsed=$(( $(date +%s) - started ))
+          echo "Windows C++ compile/link: ${elapsed} seconds" >> "$GITHUB_STEP_SUMMARY"
+          sccache --show-stats
+
+      - name: Stop compiler-cache server and print final stats
+        if: always()
+        shell: pwsh
+        run: |
+          if (Get-Command sccache -ErrorAction SilentlyContinue) {
+            sccache --show-stats
+            sccache --stop-server
+          }
+
+      # Save successful compiler objects even if a later compilation/link step fails.
+      - name: Save compiler objects
+        if: always() && steps.compiler-cache.outcome == 'success' && steps.compile.outcome != 'skipped'
+        uses: actions/cache/save@v4
+        with:
+          path: .sccache
+          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
 
       - name: Package Windows executable, runtime DLLs, and A/B controls
         shell: pwsh
