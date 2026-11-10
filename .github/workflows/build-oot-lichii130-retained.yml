@@ -1,0 +1,185 @@
+name: Lichii 130 PGO + conservative retention + wolf icon
+on:
+  push:
+    branches:
+      - experiments/oot-lichii130-retention-20261109
+    paths:
+      - .github/workflows/build-oot-lichii130-retained.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - name: Check out isolated integration files
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out official Lichii build-130 source
+        uses: actions/checkout@v4
+        with:
+          repository: zortos293/Lichii
+          ref: 3dae119aeac255a9334386cdf10ca707ef96867d
+          path: emulator
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Verify exact build-130 source and cache v2
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha = (git -C emulator rev-parse HEAD).Trim()
+          if ($sha -ne '3dae119aeac255a9334386cdf10ca707ef96867d') {
+            throw "Wrong source revision: $sha"
+          }
+          if (!(Test-Path emulator/lichii-windows.profdata)) { throw 'OOT PGO profile missing' }
+          if ((Get-Item emulator/lichii-windows.profdata).Length -lt 100000) {
+            throw 'OOT PGO profile unexpectedly small'
+          }
+          if (!(Test-Path emulator/src/video_core/renderer_vulkan/vk_shader_cache_v2.h)) {
+            throw 'Shader cache v2 missing in pinned source'
+          }
+          Write-Host "Pinned Lichii build-130 source validated: $sha"
+
+      - name: Set up Python 3.12 for source patch
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Port conservative RAM and VRAM-aware retention to shader cache v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile oot_smooth/apply_retention_build130.py
+          python oot_smooth/apply_retention_build130.py
+          test -s emulator/src/video_core/renderer_vulkan/pipeline_eviction_policy.h
+          grep -q 'Switch2PipelineBudget' emulator/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+          grep -q 'SelectPipelinesToEvict' emulator/src/video_core/renderer_vulkan/vk_pipeline_cache.cpp
+
+
+      - name: Apply Arcolade wolf EXE and Qt window icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'Pillow==11.3.0'
+          python - <<'PY'
+          from PIL import Image
+          from io import BytesIO
+          import base64
+          import hashlib
+          from pathlib import Path
+          asset = Path('oot_smooth/assets/arcolade_wolf_red_eyes_128.png.b64')
+          content = base64.b64decode(asset.read_text().strip(), validate=True)
+          want = '1678f4f0ade4d190690204308dabd23d7887e00d19462f561489365ab82cb1ef'
+          if hashlib.sha256(content).hexdigest() != want:
+              raise RuntimeError('Arcolade wolf icon checksum mismatch')
+          im = Image.open(BytesIO(content)).convert('RGBA')
+          if im.size != (128, 128):
+              raise RuntimeError('Unexpected Arcolade wolf icon size')
+          im = im.resize((256, 256), Image.Resampling.LANCZOS)
+          dest = Path('emulator/dist/lichii.ico')
+          im.save(dest, format='ICO', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])
+          print('Packaged Arcolade wolf icon:', dest, dest.stat().st_size, 'bytes')
+          PY
+          grep -q 'lichii.ico' emulator/src/yuzu/yuzu.rc
+          grep -q 'lichii.ico' emulator/src/yuzu/yuzu.qrc
+          test -s emulator/dist/lichii.ico
+
+      - name: Set up MSVC and Windows SDK
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install pinned LLVM clang-cl 22.1.8
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '22.1.8'
+          $hash = '16e5709785fef73c854646241c4a92c5cd574318d1b33c63330dd7721903e55c'
+          $installer = Join-Path $env:RUNNER_TEMP 'llvm.exe'
+          Invoke-WebRequest -OutFile $installer "https://github.com/llvm/llvm-project/releases/download/llvmorg-$version/LLVM-$version-win64.exe"
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) {
+            throw 'LLVM checksum mismatch'
+          }
+          $root = Join-Path $env:RUNNER_TEMP 'llvm'
+          Start-Process -Wait -FilePath $installer -ArgumentList '/S', "/D=$root"
+          & "$root/bin/clang-cl.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw 'Clang failed to launch' }
+          "LLVM_ROOT=$($root.Replace('\', '/'))" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Install Qt 6.8.3
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtcharts
+          cache: true
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        working-directory: emulator
+        run: ./tools/windows/install-vulkan-sdk.ps1
+
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: emulator/.cache/cpm
+          key: oot-build130-windows-cpm-v1
+          restore-keys: |
+            experimental-oot-fritchii-cpm-v1
+
+      - name: Configure Lichii build-130 Windows PGO
+        shell: bash
+        working-directory: emulator
+        run: |
+          set -euo pipefail
+          flags="-DWIN32 -D_WINDOWS -DNOMINMAX -flto=thin"
+          flags+=" -fprofile-use=$(cygpath -m "$PWD/lichii-windows.profdata")"
+          flags+=" -Wno-error=profile-instr-out-of-date -Wno-error=profile-instr-unprofiled"
+          flags+=" -Wno-error=backend-plugin"
+          cmake -S . -B build/release -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF -DYUZU_TESTS=OFF -DYUZU_CMD=ON \
+            -DYUZU_ROOM=OFF -DYUZU_ROOM_STANDALONE=OFF \
+            -DYUZU_USE_BUNDLED_QT=OFF -DYUZU_USE_BUNDLED_SDL3=ON \
+            -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=OFF \
+            -DLICHII_BUILD_TAG=oot-lichii130-retained \
+            -DLICHII_BUILD_PLATFORM=windows-x86_64-pgo \
+            "-DCMAKE_C_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
+            "-DCMAKE_CXX_COMPILER=$LLVM_ROOT/bin/clang-cl.exe" \
+            "-DCMAKE_LINKER=$LLVM_ROOT/bin/lld-link.exe" \
+            "-DCMAKE_AR=$LLVM_ROOT/bin/llvm-lib.exe" \
+            "-DCMAKE_C_FLAGS=$flags" \
+            "-DCMAKE_CXX_FLAGS=-EHsc $flags"
+
+      - name: Compile Windows EXE
+        shell: bash
+        working-directory: emulator
+        run: cmake --build build/release --target yuzu yuzu-cmd --parallel 3
+
+      - name: Package Windows executable, runtime DLLs, and A/B controls
+        shell: pwsh
+        working-directory: emulator
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (!(Test-Path build/release/bin/lichii.exe)) { throw 'lichii.exe missing' }
+          if (!(Test-Path build/release/bin/eden-cli.exe)) { throw 'eden-cli.exe missing' }
+          windeployqt --release --no-translations build/release/bin/lichii.exe
+          Copy-Item ../oot_smooth/Run_Lichii130_Retained.cmd build/release/bin/Run_Lichii130_Retained.cmd
+          Copy-Item ../oot_smooth/Run_Lichii130_StockEviction.cmd build/release/bin/Run_Lichii130_StockEviction.cmd
+          Copy-Item ../oot_smooth/README-Lichii130.txt build/release/bin/README-Lichii130.txt
+          Copy-Item LICENSE.txt build/release/bin/LICENSE.txt
+          "Upstream: zortos293/Lichii build-130 (3dae119aeac255a9334386cdf10ca707ef96867d). Added PR313-derived RAM/VRAM-bounded Switch 2 pipeline retention, optional EDEN_NX2_PIPELINE_RETAIN=0 rollback, and previous Arcolade wolf icon. Shader cache v2 and renderer correctness stay upstream. First-time game testing is still required." | Set-Content -Encoding utf8 build/release/bin/RETENTION-BUILD.txt
+
+      - name: Upload complete test build
+        uses: actions/upload-artifact@v4
+        with:
+          name: OOT-Lichii130-Retained-Wolf-Windows
+          path: emulator/build/release/bin/
+          if-no-files-found: error
+          retention-days: 30
